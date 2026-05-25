@@ -16,6 +16,10 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: tellent-site-builder
+  cancel-in-progress: false
+
 jobs:
 
   build-site:
@@ -26,35 +30,89 @@ jobs:
 
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync Latest Remote
+        run: |
+          git fetch origin main
+          git checkout main
+          git pull --rebase origin main
+
       - name: Verify Files
         run: |
-          ls
+          ls -la
           python --version
 
+      - name: Install Python Dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            echo "No requirements.txt found"
+          fi
+
       - name: Build Website
-        run: python build.py
+        run: |
+          if [ -f build.py ]; then
+            python build.py
+          else
+            echo "build.py missing"
+            exit 1
+          fi
 
       - name: Verify Dist Output
         run: |
           echo "DIST CONTENTS"
-          ls -R dist
+          ls -R dist || echo "dist folder missing"
 
       - name: Commit Fresh Blog + Site Updates
+        shell: bash
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           git add .
 
-          git diff --staged --quiet || git commit -m "Daily site rebuild and blog generation"
+          if git diff --cached --quiet; then
+            echo "No changes detected."
+            exit 0
+          fi
 
-          git push
+          git commit -m "Daily site rebuild and blog generation"
+
+      - name: Safe Push Retry Loop
+        shell: bash
+        run: |
+          for i in 1 2 3 4 5; do
+            echo "Push attempt $i"
+
+            git pull --rebase origin main || {
+              echo "Rebase failed. Retrying..."
+              git rebase --abort || true
+              sleep 5
+              continue
+            }
+
+            if git push origin main; then
+              echo "Push successful."
+              exit 0
+            fi
+
+            echo "Push rejected. Waiting before retry..."
+            sleep 5
+          done
+
+          echo "Failed to push after multiple attempts."
+          exit 1
 
       - name: Upload GitHub Pages Artifact
         uses: actions/upload-pages-artifact@v3
