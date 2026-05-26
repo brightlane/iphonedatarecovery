@@ -3,12 +3,7 @@ name: Daily Website Builder & Blog Generator
 on:
   workflow_dispatch:
 
-  push:
-    branches:
-      - main
-
   schedule:
-    # Runs every day at 8:00 AM UTC
     - cron: "0 8 * * *"
 
 permissions:
@@ -18,7 +13,7 @@ permissions:
 
 concurrency:
   group: tellent-site-builder
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
 
@@ -28,22 +23,26 @@ jobs:
 
     steps:
 
+      # Checkout repository
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: true
 
+      # Setup Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # Configure Git
       - name: Configure Git
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      # Force sync latest remote state
       - name: Sync Latest Remote
         shell: bash
         run: |
@@ -51,11 +50,13 @@ jobs:
           git checkout main
           git reset --hard origin/main
 
+      # Verify files
       - name: Verify Files
         run: |
           ls -la
           python --version
 
+      # Install dependencies
       - name: Install Python Dependencies
         shell: bash
         run: |
@@ -63,31 +64,32 @@ jobs:
 
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
-          else
-            echo "No requirements.txt found"
           fi
 
+      # Build site
       - name: Build Website
         shell: bash
         run: |
-          if [ -f build.py ]; then
-            python build.py
-          else
+          if [ ! -f build.py ]; then
             echo "ERROR: build.py missing"
             exit 1
           fi
 
+          python build.py
+
+      # Verify output
       - name: Verify Dist Output
         shell: bash
         run: |
-          echo "DIST CONTENTS"
-          ls -R dist
-
           if [ ! -d dist ]; then
             echo "ERROR: dist folder missing"
             exit 1
           fi
 
+          echo "DIST CONTENTS"
+          ls -R dist
+
+      # Detect changes
       - name: Detect Changes
         id: changes
         shell: bash
@@ -101,41 +103,48 @@ jobs:
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
 
+      # Commit
       - name: Commit Site Updates
         if: steps.changes.outputs.changed == 'true'
         shell: bash
         run: |
-          git commit -m "Daily site rebuild and blog generation"
+          git commit -m "Daily site rebuild and blog generation [skip ci]"
 
+      # Safe push
       - name: Safe Push Retry Loop
         if: steps.changes.outputs.changed == 'true'
         shell: bash
         run: |
+
           for i in 1 2 3 4 5
           do
             echo "Push attempt $i"
 
             git fetch origin main
 
-            git pull --rebase origin main || {
-              echo "Rebase failed. Cleaning state..."
+            git rebase origin/main || {
+              echo "Rebase failed"
+
               git rebase --abort || true
-              sleep 5
-              continue
+
+              git reset --hard origin/main
+
+              exit 1
             }
 
             if git push origin HEAD:main; then
-              echo "Push successful."
+              echo "Push successful"
               exit 0
             fi
 
             echo "Push rejected. Retrying..."
-            sleep 5
+            sleep 10
           done
 
-          echo "Failed to push after multiple retries."
+          echo "Failed after multiple retries"
           exit 1
 
+      # Upload Pages artifact
       - name: Upload GitHub Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
