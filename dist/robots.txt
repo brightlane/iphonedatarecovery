@@ -1,5 +1,0 @@
-
-User-agent: *
-Allow: /
-
-Sitemap: https://brightlane.github.io/tellent/sitemap.xml
